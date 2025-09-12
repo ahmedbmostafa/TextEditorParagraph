@@ -1,19 +1,18 @@
 //
-//  ParagraphBlockWrapper.swift
+//  BulletedListWrapper.swift
 //  Quillki
 //
-//  Created by Nixope on 19/10/2024.
+//  Created by Nixope on 22/09/2024.
 //
 
 import SwiftUI
 
-struct ParagraphBlockWrapper: UIViewRepresentable {
+struct BulletedListWrapper: UIViewRepresentable {
     
     @EnvironmentObject var textEditorViewModel: TextEditorViewModel
     @Binding var isFirstResponder: Bool
     @Binding var textValue: NSAttributedString
     @Binding var textFont: UIFont
-    @Binding var isTitleSet: Bool
     @Binding var contentBlock: TextEditorModel
     let onDeleteBackward: NilBooleanAction
     let scrollViewProxy: ScrollViewProxy
@@ -23,42 +22,30 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
     var endOffset: Int?
     
     class Coordinator: NSObject, UITextViewDelegate {
-        var parent: ParagraphBlockWrapper
-        private var textUpdateWorkItem: DispatchWorkItem?
-        var isUserTyping = false
-        var isPasteOperation = false
+        var parent: BulletedListWrapper
         
-        init(parent: ParagraphBlockWrapper) {
+        init(parent: BulletedListWrapper) {
             self.parent = parent
         }
         
         func textViewDidChange(_ textView: UITextView) {
-            isUserTyping = true
-            let currentSelectedRange = textView.selectedRange
             parent.textValue = textView.attributedText
-            let size = textView.sizeThatFits(CGSize(width: textView.bounds.width, height: .greatestFiniteMagnitude))
-            textView.constraints.filter { $0.firstAttribute == .height }.forEach { $0.constant = size.height }
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                if currentSelectedRange.location <= textView.attributedText.length {
-                    textView.selectedRange = currentSelectedRange
+            if let newLineRange = textView.attributedText.string.range(of: "\n", options: .backwards) {
+                let newLineIndex = textView.attributedText.string.distance(from: textView.text.startIndex, to: newLineRange.lowerBound)
+                if newLineIndex == textView.attributedText.string.count - 1 {
+                    DispatchQueue.main.async {
+                        self.parent.scrollViewProxy.scrollTo(self.parent.contentBlock.id, anchor: .bottom)
+                    }
                 }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.isUserTyping = false
             }
         }
         
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-            isUserTyping = true
-            isPasteOperation = text.count > 10
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.isPasteOperation = false
-            }
-            if text == "\n", range.location == textView.text.count {
+            if text == "\n", range.location == textView.text.count  {
                 parent.onReturnTapped?()
                 return false
             }
+            
             if text == "\n" {
                 let cursorLocation = range.location
                 let fullText = textView.text ?? ""
@@ -66,6 +53,7 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
                 let beforeText = String(fullText[..<startIndex]).removingLeadingSpaces()
                 let afterText = String(fullText[startIndex...]).removingLeadingSpaces()
                 let oldMarkups = self.parent.contentBlock.textMarkups
+
                 // Markups that belong to beforeText
                 let beforeMarkups = oldMarkups[self.parent.contentBlock.id]?.compactMap { markup -> MarkupModel? in
                     if markup.to <= beforeText.count {
@@ -79,8 +67,8 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
                     if markup.from >= beforeText.count {
                         return MarkupModel(
                             type: markup.type,
-                            from: markup.from - beforeText.count,
-                            to: markup.to - beforeText.count,
+                            from: (markup.from + 2) - beforeText.count,
+                            to: (markup.to + 2) - beforeText.count,
                             url: markup.url
                         )
                     }
@@ -90,16 +78,14 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
                 // Update the first block (beforeText)
                 let range = NSRange(location: 0, length: textView.attributedText.length)
                 textView.textStorage.replaceCharacters(in: range, with: beforeText)
-                
                 DispatchQueue.main.async {
-                    self.parent.textEditorViewModel.updateParagraphText(
+                    self.parent.textEditorViewModel.updateBulltedList(
                         for: self.parent.contentBlock.id,
                         newValue: NSAttributedString(string: beforeText),
                         updateCursor: false,
                         newMarkups: beforeMarkups ?? []
                     )
-                    
-                    self.parent.textEditorViewModel.insertParagraphBlock(text: afterText, markups: afterMarkups ?? [])
+                    self.parent.textEditorViewModel.insertBulltedListBlock(text: afterText, markups: afterMarkups ?? [])
                 }
                 return false
             }
@@ -107,12 +93,11 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
         }
         
         func textViewDidChangeSelection(_ textView: UITextView) {
-            guard !isUserTyping else { return }
             let selectedRange = textView.selectedRange
             let selectedLength = selectedRange.length
             getSelectedTextRange(textView: textView)
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
+            
+            DispatchQueue.main.async {
                 if let text = textView.text, let range = Range(selectedRange, in: text) {
                     self.parent.highlightedText = String(text[range])
                     if self.parent.highlightedText == "" {
@@ -146,12 +131,10 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
                 let startOffset = textView.offset(from: textView.beginningOfDocument, to: selectedRange.start)
                 let endOffset = textView.offset(from: textView.beginningOfDocument, to: selectedRange.end)
                 if startOffset != endOffset {
-                    DispatchQueue.main.async {
-                        self.parent.textEditorViewModel.selectedTextFrom = startOffset
-                        self.parent.textEditorViewModel.selectedTextTo = endOffset
-                        self.parent.startOffset = startOffset
-                        self.parent.endOffset = endOffset
-                    }
+                    parent.textEditorViewModel.selectedTextFrom = startOffset
+                    parent.textEditorViewModel.selectedTextTo = endOffset
+                    parent.startOffset = startOffset
+                    parent.endOffset = endOffset
                 }
             }
         }
@@ -197,7 +180,7 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
         textView.linkTextAttributes = contentBlock.linkAttributes
         textView.layoutManager.allowsNonContiguousLayout = false
         textView.textContainer.lineFragmentPadding = 0
-        textView.textContainerInset = UIEdgeInsets(top: 0, left: 0, bottom: 8, right: 0)
+        textView.textContainerInset = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         textView.textContainer.widthTracksTextView = true
         textView.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -212,43 +195,19 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
     func updateUIView(_ uiView: CustomizedUITextView, context: Context) {
         guard let index = textEditorViewModel.contentBlocks.firstIndex(where: { $0.id == contentBlock.id }) else { return }
         let block = textEditorViewModel.contentBlocks[index]
-        let currentSelectedRange = uiView.selectedRange
-        let wasFirstResponder = uiView.isFirstResponder
-        
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
-        let extractedText = block.extractAttributedString(content: block.content)
-        let language = detectLanguage(text: extractedText.string)
+        let extractedText = block.extractAttributedString(content: block.content).string
+        let language = detectLanguage(text: extractedText)
         (language == "ar" || language == "ur") ? (paragraphStyle.alignment = .right) : (paragraphStyle.alignment = .left)
-        let attributedText = NSMutableAttributedString(attributedString: extractedText)
-        let validRange = NSRange(location: 0, length: attributedText.length)
-        attributedText.addAttribute(.paragraphStyle, value: paragraphStyle, range: validRange)
+        let padding: UIEdgeInsets
+        padding = UIEdgeInsets(top: 0, left: language == "ar" ? 16 : 0, bottom: 8, right: language == "ar" ? 0 : 16)
+        uiView.textContainerInset = padding
+        let attributedText = NSMutableAttributedString(attributedString: block.extractAttributedString(content: block.content))
+        let range = NSRange(location: 0, length: attributedText.length)
+        attributedText.addAttribute(.paragraphStyle, value: paragraphStyle, range: range)
         
-        // CRITICAL: Only update text if it's actually different AND not during user interaction
-        if !context.coordinator.isUserTyping &&
-           !context.coordinator.isPasteOperation &&
-           uiView.attributedText != attributedText {
-            
-            // Only update if the text content is actually different
-            let currentText = uiView.attributedText?.string ?? ""
-            let newText = attributedText.string
-            
-            if currentText != newText {
-                uiView.attributedText = attributedText
-                
-                // Restore cursor position
-                let newLength = uiView.attributedText.length
-                if currentSelectedRange.location <= newLength &&
-                   currentSelectedRange.location + currentSelectedRange.length <= newLength {
-                    uiView.selectedRange = currentSelectedRange
-                } else {
-                    uiView.selectedRange = NSRange(location: newLength, length: 0)
-                }
-            }
-        }
-        
-        // Handle paste operations
-        if context.coordinator.isPasteOperation {
+        if uiView.attributedText != attributedText {
             let selectedRange = uiView.selectedRange
             uiView.attributedText = attributedText
             let newLength = uiView.attributedText.length
@@ -268,15 +227,7 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
                 uiView.resignFirstResponder()
             }
         }
+        
         uiView.onDeleteBackward = onDeleteBackward
-    }
-}
-
-extension String {
-    func removingLeadingSpaces() -> String {
-        guard let index = firstIndex(where: { !$0.isWhitespace }) else {
-            return "" // string is all spaces
-        }
-        return String(self[index...])
     }
 }
