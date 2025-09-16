@@ -26,16 +26,27 @@ struct TextEditorWrapperV2: UIViewRepresentable {
     class Coordinator: NSObject, UITextViewDelegate {
         var parent: TextEditorWrapperV2
         private var textUpdateWorkItem: DispatchWorkItem?
+        var isUserTyping = false
+        var isPasteOperation = false
         
         init(parent: TextEditorWrapperV2) {
             self.parent = parent
         }
         
         func textViewDidChange(_ textView: UITextView) {
+            isUserTyping = true
             parent.textValue = textView.attributedText
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.isUserTyping = false
+            }
         }
         
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            isUserTyping = true
+            isPasteOperation = text.count > 10
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.isPasteOperation = false
+            }
             if text == "\n", range.location == textView.text.count {
                 parent.onReturnTapped?()
                 return false
@@ -105,6 +116,7 @@ struct TextEditorWrapperV2: UIViewRepresentable {
         }
         
         func textViewDidChangeSelection(_ textView: UITextView) {
+            guard !isUserTyping else { return }
             let selectedRange = textView.selectedRange
             let selectedLength = selectedRange.length
             let type = self.parent.contentBlock.content
@@ -149,10 +161,12 @@ struct TextEditorWrapperV2: UIViewRepresentable {
                 let startOffset = textView.offset(from: textView.beginningOfDocument, to: selectedRange.start)
                 let endOffset = textView.offset(from: textView.beginningOfDocument, to: selectedRange.end)
                 if startOffset != endOffset {
-                    parent.textEditorViewModel.selectedTextFrom = startOffset
-                    parent.textEditorViewModel.selectedTextTo = endOffset
-                    parent.startOffset = startOffset
-                    parent.endOffset = endOffset
+                    DispatchQueue.main.async {
+                        self.parent.textEditorViewModel.selectedTextFrom = startOffset
+                        self.parent.textEditorViewModel.selectedTextTo = endOffset
+                        self.parent.startOffset = startOffset
+                        self.parent.endOffset = endOffset
+                    }
                 }
             }
         }
@@ -214,6 +228,7 @@ struct TextEditorWrapperV2: UIViewRepresentable {
     func updateUIView(_ uiView: CustomizedUITextView, context: Context) {
         guard let index = textEditorViewModel.contentBlocks.firstIndex(where: { $0.id == contentBlock.id }) else { return }
         let block = textEditorViewModel.contentBlocks[index]
+        let currentSelectedRange = uiView.selectedRange
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
         let extractedText = block.extractAttributedString(content: block.content)
@@ -223,7 +238,45 @@ struct TextEditorWrapperV2: UIViewRepresentable {
         let validRange = NSRange(location: 0, length: attributedText.length)
         attributedText.addAttribute(.paragraphStyle, value: paragraphStyle, range: validRange)
         
-        if uiView.attributedText != attributedText {
+        // CRITICAL: Only update text if it's actually different AND not during user interaction
+        if !context.coordinator.isUserTyping &&
+           !context.coordinator.isPasteOperation &&
+           uiView.attributedText != attributedText {
+            
+            let currentText = uiView.attributedText?.string ?? ""
+            let newText = attributedText.string
+            
+            if currentText != newText {
+                uiView.attributedText = attributedText
+                
+                // Restore cursor position
+                let newLength = uiView.attributedText.length
+                if currentSelectedRange.location <= newLength &&
+                   currentSelectedRange.location + currentSelectedRange.length <= newLength {
+                    let safePosition = min(newLength, uiView.attributedText.length)
+                    uiView.selectedRange = NSRange(location: safePosition, length: 0)
+                } else {
+                    uiView.selectedRange = NSRange(location: newLength, length: 0)
+                }
+            }
+        }
+        
+        // Handle paste operations
+        if context.coordinator.isPasteOperation {
+            let selectedRange = uiView.selectedRange
+            uiView.attributedText = attributedText
+            let newLength = uiView.attributedText.length
+            if selectedRange.location <= newLength {
+                uiView.selectedRange = selectedRange
+            } else {
+                uiView.selectedRange = NSRange(location: newLength, length: 0)
+            }
+        }
+        
+        let selectedRange = uiView.selectedRange
+        let selectedLength = selectedRange.length
+        
+        if selectedLength > 1 {
             let selectedRange = uiView.selectedRange
             uiView.attributedText = attributedText
             let newLength = uiView.attributedText.length
@@ -433,3 +486,10 @@ class CustomizedUITextView: UITextView {
 }
 
 typealias NilBooleanAction = (() -> Void)?
+
+class CustomTextView: UITextView {
+//    user can perform default actions
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        return false
+    }
+}

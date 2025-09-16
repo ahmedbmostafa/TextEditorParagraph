@@ -34,16 +34,7 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
         
         func textViewDidChange(_ textView: UITextView) {
             isUserTyping = true
-            let currentSelectedRange = textView.selectedRange
             parent.textValue = textView.attributedText
-            let size = textView.sizeThatFits(CGSize(width: textView.bounds.width, height: .greatestFiniteMagnitude))
-            textView.constraints.filter { $0.firstAttribute == .height }.forEach { $0.constant = size.height }
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                if currentSelectedRange.location <= textView.attributedText.length {
-                    textView.selectedRange = currentSelectedRange
-                }
-            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 self?.isUserTyping = false
             }
@@ -201,9 +192,14 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
         textView.textContainer.widthTracksTextView = true
         textView.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let textLength = textView.attributedText.length
         if isFirstResponder {
             DispatchQueue.main.async {
                 textView.becomeFirstResponder()
+                if !textView.text.isEmpty {
+                    let safePosition = min(textLength, textView.attributedText.length)
+                    textView.selectedRange = NSRange(location: safePosition, length: 0)
+                }
             }
         }
         return textView
@@ -249,6 +245,20 @@ struct ParagraphBlockWrapper: UIViewRepresentable {
         
         // Handle paste operations
         if context.coordinator.isPasteOperation {
+            let selectedRange = uiView.selectedRange
+            uiView.attributedText = attributedText
+            let newLength = uiView.attributedText.length
+            if selectedRange.location <= newLength {
+                uiView.selectedRange = selectedRange
+            } else {
+                uiView.selectedRange = NSRange(location: newLength, length: 0)
+            }
+        }
+        
+        let selectedRange = uiView.selectedRange
+        let selectedLength = selectedRange.length
+        
+        if selectedLength > 1 {
             let selectedRange = uiView.selectedRange
             uiView.attributedText = attributedText
             let newLength = uiView.attributedText.length
